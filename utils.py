@@ -10,6 +10,7 @@ from geotext import GeoText
 from geopy.geocoders import Nominatim
 import matplotlib.pyplot as plt
 from mpl_toolkits.basemap import Basemap
+import folium
 
 class Search:
 
@@ -58,7 +59,10 @@ class Search:
             if authors:
                 temp = []
                 for author in authors:
-                    affiliation = author['AffiliationInfo'][0]['Affiliation']
+                    try:
+                        affiliation = author['AffiliationInfo'][0]['Affiliation']
+                    except:
+                        continue
                     name = author['ForeName']
                     surname = author['LastName']
 
@@ -78,19 +82,22 @@ class Search:
         return df
     
     def extract_geo(self, df):
-        df.drop_duplicates(subset=['affiliation'], inplace=True)
+        #df.drop_duplicates(subset=['affiliation'], inplace=True)
         df.reset_index(inplace=True, drop=True)
-        
-        cities = []
+
+        data = []
         for idx in df.index:
             affiliation = df.loc[df.index[idx], 'affiliation']
             city = GeoText(affiliation).cities
             if city:
-                cities.append(' '.join(city))
+                data.append([' '.join(city), 
+                            affiliation, 
+                            df.loc[df.index[idx], 'name'], 
+                            df.loc[df.index[idx], 'surname']])
         
-        return cities
+        return data
     
-    def map(self, geo):
+    def map(self, data):
         geolocator = Nominatim(timeout=10)
 
         map = Basemap(width=10000000, height=6000000, 
@@ -100,7 +107,8 @@ class Search:
         map.drawmapboundary()
         map.fillcontinents(color='grey')
 
-        for city in geo:
+        for datum in data:
+            city = datum[0]
             loc = geolocator.geocode(city)
             if not loc:
                 print(f'Cannot locate {city}.')
@@ -108,11 +116,27 @@ class Search:
             
             x, y = map(loc.longitude, loc.latitude)
             map.plot(x, y, marker='o', color='Red')
-            #plt.annotate(city, xy=(x, y))
+            plt.annotate(datum[2] + ' ' + datum[3], xy=(x, y))
         
         plt.show()
+    
+    def interactive_map(self, data):
 
-ex = Search("lorenzo_fabbri92@icloud.com", 10)
-authors = ex.search("coronavirus")
-cities = ex.extract_geo(authors)
-ex.map(cities)
+        folium_map = folium.Map()
+        geolocator = Nominatim(timeout=10)
+
+        for datum in data:
+            city = datum[0]
+            loc = geolocator.geocode(city)
+            if not loc:
+                print(f'Cannot locate {city}.')
+                continue
+            
+            lat = loc.latitude
+            lon = loc.longitude
+            txt = f'Affiliation: {datum[1]}<br> Name: {datum[2]}<br> Surname: {datum[3]}'
+            folium.CircleMarker(location=(lat, lon), 
+                                popup=txt, 
+                                fill=True).add_to(folium_map)
+        
+        return folium_map

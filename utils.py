@@ -12,19 +12,44 @@ import matplotlib.pyplot as plt
 from mpl_toolkits.basemap import Basemap
 import folium
 
+class Author:
+
+    def __init__(self, name, surname):
+        self.name = name
+        self.surname = surname
+        self.collaborators = []  # List of Authors
+        self.titles = []
+
+    def add_collaborator(self, name, surname):
+        self.collaborators.append(Author(name, surname))
+    
+    def get_collaborators(self):
+        res = []
+        for author in self.collaborators:
+            res.append(author.name + ' ' + author.surname)
+        
+        return res
+
+    def add_title(self, title, year):
+        self.titles.append([title, year])
+
+    def get_titles(self):
+        pprint(self.titles)
+
 class Search:
 
-    def __init__(self, email, retmax):
+    def __init__(self, email, retmax, sort='relevance'):
         self.query = ""
-        self.countries = []
         self.email = email
         self.retmax = retmax
+        self.sort = sort
+        self.authors = {}
     
     def esearch(self, query):
         self.query = query
         Entrez.email = self.email
 
-        handle = Entrez.esearch(db='pubmed', sort='relevance', 
+        handle = Entrez.esearch(db='pubmed', sort=self.sort, 
                                 retmax=self.retmax, retmode='xml', 
                                 term=self.query)
         results = Entrez.read(handle)
@@ -47,11 +72,12 @@ class Search:
         papers = self.efetch(ids_list)
 
         df_authors_papers = []
-        for idx, paper in enumerate(papers['PubmedArticle']):
+        for _, paper in enumerate(papers['PubmedArticle']):
             try:
                 article = paper['MedlineCitation']['Article']
+                year = article['Journal']['JournalIssue']['PubDate']['Year']
                 title = article['ArticleTitle']
-                abstract = article['Abstract']
+                #abstract = article['Abstract']
                 authors = article['AuthorList']
             except:
                 continue
@@ -61,10 +87,22 @@ class Search:
                 for author in authors:
                     try:
                         affiliation = author['AffiliationInfo'][0]['Affiliation']
+                        name = author['ForeName']
+                        surname = author['LastName']
                     except:
                         continue
-                    name = author['ForeName']
-                    surname = author['LastName']
+
+                    temp_author = Author(name, surname)
+                    temp_author.add_title(title, year)
+                    for inner_author in authors:
+                        if inner_author != author:
+                            try:
+                                inner_name = inner_author['ForeName']
+                                inner_surname = inner_author['LastName']
+                            except:
+                                continue
+                            temp_author.add_collaborator(inner_name, inner_surname)
+                    self.authors[name + ' ' + surname] = temp_author
 
                     temp_author = {'name': name, 
                                     'surname': surname, 

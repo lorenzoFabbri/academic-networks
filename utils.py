@@ -1,180 +1,264 @@
 """
-Utility functions to create list and network of possible supervisors and/or collaborators.
+Utility classes.
 Author: Lorenzo Fabbri
 """
 
-from Bio import Entrez
-from pprint import pprint
 import pandas as pd
+from Bio import Entrez
 from geotext import GeoText
 from geopy.geocoders import Nominatim
+from pprint import pprint
 import matplotlib.pyplot as plt
 from mpl_toolkits.basemap import Basemap
 import folium
+import networkx as nx
+from pyvis.network import Network
 
 class Author:
+    """
+    Class that represents an author.
+    """
 
     def __init__(self, name, surname):
         self.name = name
         self.surname = surname
-        self.collaborators = []  # List of Authors
-        self.titles = []
-
+        self.collaborators = []
+    
     def add_collaborator(self, name, surname):
         self.collaborators.append(Author(name, surname))
     
     def get_collaborators(self):
-        res = []
+        ret = []
         for author in self.collaborators:
-            res.append(author.name + ' ' + author.surname)
+            ret.append(author.name + ' '  + author.surname)
         
-        return res
+        return ret
+    
+    def create_df(self):
+        pass
 
-    def add_title(self, title, year):
-        self.titles.append([title, year])
+class Paper:
+    """
+    Class that represents a publication.
+    """
 
-    def get_titles(self):
-        pprint(self.titles)
+    def __init__(self, paper):
+        self.retrieve_details(paper)
+    
+    def retrieve_details(self, xml):
+        """
+        Function that retrieves details of single 
+        paper using XML result.
+        """
+
+        citation = xml['MedlineCitation']
+
+        self.abstract = str(citation['Article']['Abstract']['AbstractText'][0])
+
+        try:
+            self.year = citation['Article']['ArticleDate'][0]['Year']
+        except:
+            self.year = citation['Article']['Journal']['JournalIssue']['PubDate']['Year']
+
+        self.journal = citation['Article']['Journal']['ISOAbbreviation']
+        self.title = citation['Article']['ArticleTitle']
+
+        self.retrieve_authors(xml)
+    
+    def retrieve_authors(self, xml):
+        """
+        Function that retrieves all the authors of single paper 
+        using XML result.
+        """
+
+        citation = xml['MedlineCitation']
+        _authors = list(citation['Article']['AuthorList'])
+        self.authors = {}
+
+        for _author in _authors:
+            affiliations = [aff['Affiliation'] for aff in _author['AffiliationInfo']]
+            name = _author['ForeName']
+            surname = _author['LastName']
+            author = Author(name, surname)
+            self.authors[author] = affiliations
+    
+    def to_dict(self):
+        """
+        Creates dictionary of information from Paper object.
+        """
+
+        return {
+            'title': self.title, 
+            'year': self.year, 
+            'journal': self.journal, 
+            'authors': [el.name + ' ' + el.surname for el in self.authors.keys()]
+        }
 
 class Search:
+    """
+    Class that performs search using PubMed with user-defined 
+    query.
+    """
 
-    def __init__(self, email, retmax, sort='relevance'):
+    def __init__(self, email, retmax, sort):
         self.query = ""
         self.email = email
         self.retmax = retmax
         self.sort = sort
-        self.authors = {}
     
     def esearch(self, query):
+        """
+        Search PubMed based on query.
+        """
+
         self.query = query
         Entrez.email = self.email
 
         handle = Entrez.esearch(db='pubmed', sort=self.sort, 
                                 retmax=self.retmax, retmode='xml', 
                                 term=self.query)
-        results = Entrez.read(handle)
-
-        return results
+        
+        return Entrez.read(handle)
     
     def efetch(self, ids_list):
+        """
+        Fetch titles from PubMed.
+        """
+
         ids = ','.join(ids_list)
         Entrez.email = self.email
 
         handle = Entrez.efetch(db='pubmed', retmode='xml', 
                                 id=ids)
-        results = Entrez.read(handle)
+        
+        return Entrez.read(handle)
+    
+    def perform_search(self, query):
+        """
+        Search and fetch titles from PubMed.
+        """
 
-        return results
+        res = self.esearch(query)
+        ids_list = res['IdList']
+        
+        return self.efetch(ids_list)
     
     def search(self, query):
-        results = self.esearch(query)
-        ids_list = results['IdList']
-        papers = self.efetch(ids_list)
+        """
+        Function to actually perform search.
+        """
 
-        df_authors_papers = []
-        for _, paper in enumerate(papers['PubmedArticle']):
-            try:
-                article = paper['MedlineCitation']['Article']
-                year = article['Journal']['JournalIssue']['PubDate']['Year']
-                title = article['ArticleTitle']
-                #abstract = article['Abstract']
-                authors = article['AuthorList']
-            except:
-                continue
+        res = self.perform_search(query)
+        papers = []
 
-            if authors:
-                temp = []
-                for author in authors:
-                    try:
-                        affiliation = author['AffiliationInfo'][0]['Affiliation']
-                        name = author['ForeName']
-                        surname = author['LastName']
-                    except:
-                        continue
-
-                    temp_author = Author(name, surname)
-                    temp_author.add_title(title, year)
-                    for inner_author in authors:
-                        if inner_author != author:
-                            try:
-                                inner_name = inner_author['ForeName']
-                                inner_surname = inner_author['LastName']
-                            except:
-                                continue
-                            temp_author.add_collaborator(inner_name, inner_surname)
-                    self.authors[name + ' ' + surname] = temp_author
-
-                    temp_author = {'name': name, 
-                                    'surname': surname, 
-                                    'affiliation': affiliation}
-                    temp.append(temp_author)
-            
-            df_authors_papers.append(pd.DataFrame(temp))
+        for _paper in res['PubmedArticle']:
+            paper = Paper(_paper)
+            papers.append(paper)
         
-        df = pd.concat(df_authors_papers, ignore_index=True, 
-                        sort=True)
-        df.sort_values(by=['surname'], inplace=True)
-        df.drop_duplicates(subset=['name', 'surname'], inplace=True)
+        return papers
+    
+    def create_df(self, papers):
+        """
+        Creates Pandas DataFrame with information 
+        for each retrieved paper based on 
+        user-defined query.
+        """
+
+        df = pd.DataFrame.from_records([paper.to_dict() for paper in papers])
+        df.sort_values(by=['year'], ascending=False, inplace=True)
         df.reset_index(inplace=True, drop=True)
 
         return df
-    
-    def extract_geo(self, df):
-        #df.drop_duplicates(subset=['affiliation'], inplace=True)
-        df.reset_index(inplace=True, drop=True)
 
-        data = []
-        for idx in df.index:
-            affiliation = df.loc[df.index[idx], 'affiliation']
-            city = GeoText(affiliation).cities
-            if city:
-                data.append([' '.join(city), 
-                            affiliation, 
-                            df.loc[df.index[idx], 'name'], 
-                            df.loc[df.index[idx], 'surname']])
+class Networks:
+    """
+    Class that creates networks of collaborators.
+    """
+
+    def generate_networks_from_papers(self, papers):
+        """
+        Generates networks of collaborators starting from retrieved papers.
+        """
+
+        _df = pd.DataFrame.from_records([paper.to_dict() for paper in papers])
+        _collaborators = {}
+
+        for idx in _df.index:
+            for _author in _df.loc[_df.index[idx], 'authors']:
+                if _author not in _collaborators.keys():
+                    _collaborators[_author] = []
+                    _collaborators[_author].extend(_df.loc[_df.index[idx], 'authors'])
+                else:
+                    _collaborators[_author].extend(_df.loc[_df.index[idx], 'authors'])
         
-        return data
-    
-    def map(self, data):
-        geolocator = Nominatim(timeout=10)
-
-        map = Basemap(width=10000000, height=6000000, 
-                        projection='cyl', resolution='i')
-        map.drawcountries()
-        map.drawcoastlines()
-        map.drawmapboundary()
-        map.fillcontinents(color='grey')
-
-        for datum in data:
-            city = datum[0]
-            loc = geolocator.geocode(city)
-            if not loc:
-                print(f'Cannot locate {city}.')
-                continue
-            
-            x, y = map(loc.longitude, loc.latitude)
-            map.plot(x, y, marker='o', color='Red')
-            plt.annotate(datum[2] + ' ' + datum[3], xy=(x, y))
+        for _author in _collaborators.keys():
+            _collaborators[_author].remove(_author)
+            _collaborators[_author] = set(_collaborators[_author])
         
-        plt.show()
-    
-    def interactive_map(self, data):
+        # Graph based on collaborators for each author
+        g = nx.DiGraph()
+        g.add_nodes_from(_collaborators.keys())
+        for k, v in _collaborators.items():
+            g.add_edges_from(([(k, t) for t in v]))
+        
+        # Interactive network based on graph
+        net = Network(height=700, width=700, notebook=True)
+        net.from_nx(g)
 
+        return net
+
+class Map:
+    """
+    Class that creates maps of collaborators.
+    """
+    
+    def extract_geo_from_papers(self, papers):
+        """
+        Geo-localization based on affiliations authors.
+        """
+
+        geo = []
+
+        for _paper in papers:
+            for _author in _paper.authors.items():
+                for _affiliation in _author[1]:
+                    _geo = GeoText(_affiliation).cities
+                    if _geo:
+                        geo.append({
+                            'name': _author[0].name, 
+                            'surname': _author[0].surname, 
+                            'affiliation': _affiliation, 
+                            'geo': ' '.join(_geo)
+                        })
+        
+        return geo
+    
+    def generate_interactive_map_from_papers(self, geo):
         folium_map = folium.Map()
         geolocator = Nominatim(timeout=10)
+        self.num_affiliations_tot = 0
+        self.not_found = 0
 
-        for datum in data:
-            city = datum[0]
+        for _geo in geo:
+            city = _geo['geo']
+            self.num_affiliations_tot += 1
             loc = geolocator.geocode(city)
             if not loc:
-                print(f'Cannot locate {city}.')
+                self.not_found += 1
                 continue
             
             lat = loc.latitude
             lon = loc.longitude
-            txt = f'Affiliation: {datum[1]}<br> Name: {datum[2]}<br> Surname: {datum[3]}'
+            aff = _geo['affiliation']
+            name = _geo['name']
+            surname = _geo['surname']
+            txt = f'Affiliation: {aff}<br> Name: {name}<br> Surname: {surname}'
+
             folium.CircleMarker(location=(lat, lon), 
                                 popup=txt, 
                                 fill=True).add_to(folium_map)
         
+        print(f'Number of total affiliations: {self.num_affiliations_tot}.')
+        print(f'Number of affiliations not found: {self.not_found}.')
+
         return folium_map

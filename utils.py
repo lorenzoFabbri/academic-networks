@@ -152,8 +152,11 @@ class Search:
         papers = []
 
         for _paper in res['PubmedArticle']:
-            paper = Paper(_paper)
-            papers.append(paper)
+            try:
+                paper = Paper(_paper)
+                papers.append(paper)
+            except:
+                continue
         
         return papers
     
@@ -242,21 +245,24 @@ class Map:
         for _geo in geo:
             city = _geo['geo']
             self.num_affiliations_tot += 1
-            loc = geolocator.geocode(city)
-            if not loc:
+            
+            try:
+                loc = geolocator.geocode(city)
+                
+                lat = loc.latitude
+                lon = loc.longitude
+                aff = _geo['affiliation']
+                name = _geo['name']
+                surname = _geo['surname']
+                txt = f'Affiliation: {aff}<br> Name: {name}<br> Surname: {surname}'
+
+                folium.CircleMarker(location=(lat, lon), 
+                                    popup=txt, 
+                                    fill=True).add_to(folium_map)
+            
+            except:
                 self.not_found += 1
                 continue
-            
-            lat = loc.latitude
-            lon = loc.longitude
-            aff = _geo['affiliation']
-            name = _geo['name']
-            surname = _geo['surname']
-            txt = f'Affiliation: {aff}<br> Name: {name}<br> Surname: {surname}'
-
-            folium.CircleMarker(location=(lat, lon), 
-                                popup=txt, 
-                                fill=True).add_to(folium_map)
         
         print(f'Number of total affiliations: {self.num_affiliations_tot}.')
         print(f'Number of affiliations not found: {self.not_found}.')
